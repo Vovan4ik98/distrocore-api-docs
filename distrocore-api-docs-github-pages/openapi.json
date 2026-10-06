@@ -1,0 +1,3682 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Distrocore API",
+    "version": "2026.10.06",
+    "description": "API Distrocore для загрузки и редактирования музыкальных релизов, получения кодов, питчинга и аналитики.\n\n## Авторизация\nАдминистратор Distrocore выдаёт персональный API-токен, привязанный к вашему кабинету. В каждом запросе используйте `Authorization: Bearer <API_TOKEN>`. Не используйте токен входа в веб-кабинет вместо API-токена.\nПрава токена: `b2b_releases` — релизы, файлы и справочники; `b2b_catalog` — каталог UPC/ISRC; `b2b_pitching` — питчинг. Нужные права выдаются администратором. Доступны только данные вашего кабинета.\n\n## Быстрый старт\n1. Создайте черновик через `POST /b2b/v1/releases` и сохраните **number**.\n2. Получите жанры и площадки. Заполните метаданные через PATCH; используйте ID жанров и названия магазинов из справочников.\n3. Загрузите обложку как multipart-поле `file`.\n4. Получите `uploadUrl`, `key`, `contentType` для аудио. Выполните отдельный PUT бинарного файла на **выданный uploadUrl** с указанным Content-Type; API-токен в запрос к uploadUrl не добавляйте. Затем подтвердите загрузку через `/tracks/confirm`.\n5. Укажите исполнителей, композиторов и авторов текста. Сохраните UUID **track.id** из ответа; position и number трека — другие значения.\n6. Вызовите `/submit`. `newStatus` означает переход на модерацию, а не завершённую доставку на площадки. При HTTP 422 исправьте `validationErrors` и повторите отправку.\n\n## Изменения опубликованного релиза\nСоздайте редакцию через `/create-edit`, используйте её новый number и заново прочитайте её треки через GET. **Редакция получает другие UUID треков**: UUID оригинального трека не подходит для replace в редакции. Редактируйте и отправляйте редакцию через её number. Создание редакции разрешено для approved после 24 часов с одобрения; при HTTP 409 смотрите availableAt.\n\n## Лимиты и загрузки\nЛимит B2B — 2000 запросов в минуту на токен, общий для методов B2B. При HTTP 429 задержку возвращает JSON-поле retryAfter (секунды). Аудио: WAV/FLAC, до 1 ГиБ. Обложка: файл с расширением .jpg, квадрат 3000–6000 пикселей, до 10 МиБ. Дополнительные файлы загружаются отдельным циклом presign → PUT → confirm.\nПроверяйте результат загрузки перед confirm. У confirm нет задокументированного ключа идемпотентности: при потерянном ответе сначала проверьте GET релиза. Если указать занятую position, confirm обновляет трек на этой позиции.\nИнструментальный трек не должен содержать непустой lyrics. Для назначения UPC используйте auto_upc=true без своего UPC; присвоенный платформой UPC менять или удалять нельзя.\n\n## Уведомления\nАдминистратор может настроить webhook URL для вашего API-токена. На него отправляются POST с event `release.approved` или `release.rejected`, timestamp и data (id, number, title, status, upc, isrcs; при отклонении — moderationMessage/reason/comment/message). Подпись и гарантированная повторная доставка webhook текущим контрактом не предусмотрены. Актуальный статус и коды проверяйте через GET релиза.\n\n## Запросы из браузера\nДля серверной интеграции используйте базовый URL напрямую. Текущий API B2B не выдаёт CORS-заголовки для браузеров на сторонних доменах, поэтому прямое выполнение запросов из опубликованной документации может блокироваться браузером. Примеры cURL и запросы с вашего сервера работают независимо от CORS.\n"
+  },
+  "servers": [
+    {
+      "url": "https://api.distrocore.ru/api",
+      "description": "Рабочий API Distrocore"
+    }
+  ],
+  "tags": [
+    {
+      "name": "Релизы",
+      "description": "Создание, модерация и редакции"
+    },
+    {
+      "name": "Треки",
+      "description": "Аудио и метаданные треков"
+    },
+    {
+      "name": "Файлы",
+      "description": "Обложки, видео, рингтоны и TTML"
+    },
+    {
+      "name": "Справочники",
+      "description": "Жанры и доступные площадки"
+    },
+    {
+      "name": "Каталог кодов",
+      "description": "Назначенные UPC и ISRC"
+    },
+    {
+      "name": "Питчинг",
+      "description": "Заявки на редакционное продвижение"
+    },
+    {
+      "name": "Аналитика",
+      "description": "Данные о прослушиваниях"
+    }
+  ],
+  "security": [
+    {
+      "BearerAuth": []
+    }
+  ],
+  "paths": {
+    "/b2b/v1/releases": {
+      "post": {
+        "operationId": "createRelease",
+        "summary": "Создать черновик",
+        "description": "Право токена: `b2b_releases`. Сохраните number для последующих запросов. Новые релизы создаются в draft.",
+        "tags": [
+          "Релизы"
+        ],
+        "responses": {
+          "200": {
+            "description": "Успешный ответ",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "releaseId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "number": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "releaseId",
+                    "number"
+                  ]
+                },
+                "example": {
+                  "success": true,
+                  "message": "B2B Release Draft Created",
+                  "releaseId": "11111111-1111-4111-8111-111111111111",
+                  "number": 123
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          }
+        },
+        "x-required-scope": "b2b_releases",
+        "requestBody": {
+          "description": "Поля запроса. Имена полей чувствительны к регистру.",
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "releaseType": {
+                    "type": "string",
+                    "enum": [
+                      "single",
+                      "single_maxi",
+                      "ep",
+                      "album"
+                    ],
+                    "default": "single"
+                  },
+                  "title": {
+                    "type": "string",
+                    "default": ""
+                  }
+                }
+              },
+              "example": {
+                "releaseType": "single",
+                "title": "Новый сингл"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/b2b/v1/releases/{number}": {
+      "get": {
+        "operationId": "getRelease",
+        "summary": "Получить релиз и UUID треков",
+        "description": "Право токена: `b2b_releases`. Возвращает активные треки, текущий статус, коды и pending_update. Ответ также может содержать дополнительные поля.",
+        "tags": [
+          "Релизы"
+        ],
+        "responses": {
+          "200": {
+            "description": "Успешный ответ",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "release": {
+                      "$ref": "#/components/schemas/Release"
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "release"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        },
+        "x-required-scope": "b2b_releases",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ReleaseLookup"
+          }
+        ]
+      },
+      "patch": {
+        "operationId": "updateRelease",
+        "summary": "Обновить метаданные релиза",
+        "description": "Право токена: `b2b_releases`. Доступно в draft, rejected, rejected_by_tenant и review_error. PATCH заменяет переданный release_artists целиком; selected_stores преобразуется по доступным площадкам. UPC, присвоенный платформой, защищён от изменений. При HTTP 422 details содержит ошибки полей.",
+        "tags": [
+          "Релизы"
+        ],
+        "responses": {
+          "200": {
+            "description": "Успешный ответ",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SuccessMessage"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/BadRequest"
+          }
+        },
+        "x-required-scope": "b2b_releases",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ReleaseLookup"
+          }
+        ],
+        "requestBody": {
+          "description": "Поля запроса. Имена полей чувствительны к регистру.",
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReleasePatch"
+              },
+              "example": {
+                "title": "Новый сингл",
+                "language": "ru",
+                "release_date": "2026-12-01",
+                "auto_upc": true,
+                "delivery_mode": "manual",
+                "selected_stores": [
+                  "Spotify",
+                  "Apple Music"
+                ],
+                "release_artists": [
+                  {
+                    "name": "Пример артиста",
+                    "role": "primary"
+                  }
+                ]
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteRelease",
+        "summary": "Удалить черновик или запросить снятие",
+        "description": "Право токена: `b2b_releases`. Черновик/отклонённый релиз без истории доставки удаляется. Для релиза с доставкой создаётся заявка на снятие: pending_deletion либо pending_tenant_deletion_review в зависимости от настроек кабинета и прав. Это не подтверждение снятия с площадок. Активные редакции оригинала очищаются вместе с заявкой.",
+        "tags": [
+          "Релизы"
+        ],
+        "responses": {
+          "200": {
+            "description": "Успешный ответ",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string"
+                    },
+                    "isExtendedMode": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        },
+        "x-required-scope": "b2b_releases",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ReleaseLookup"
+          }
+        ]
+      }
+    },
+    "/b2b/v1/releases/{number}/create-edit": {
+      "post": {
+        "operationId": "createReleaseEdit",
+        "summary": "Создать редакцию опубликованного релиза",
+        "description": "Право токена: `b2b_releases`. Только для approved, после 24 часов с одобрения. Возвращает number новой редакции либо уже существующей. GET редакции возвращает новые UUID треков. Ответ не содержит success. Редактируйте и отправляйте редакцию через её number.",
+        "tags": [
+          "Релизы"
+        ],
+        "responses": {
+          "200": {
+            "description": "Успешный ответ",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "number": {
+                      "type": "integer"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "number"
+                  ]
+                },
+                "example": {
+                  "number": 124
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        },
+        "x-required-scope": "b2b_releases",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ReleaseNumber"
+          }
+        ]
+      }
+    },
+    "/b2b/v1/releases/{number}/submit": {
+      "post": {
+        "operationId": "submitRelease",
+        "summary": "Отправить релиз или редакцию на модерацию",
+        "description": "Право токена: `b2b_releases`. Доступно в draft, rejected, rejected_by_tenant и review_error. Без тела запроса. Проверяет полные метаданные и файлы. Новый релиз переходит в pending_moderation, редакция — в pending_update_review. При HTTP 422 validationErrors/warnings указывают, что нужно исправить. Это не доставка на площадки.",
+        "tags": [
+          "Релизы"
+        ],
+        "responses": {
+          "200": {
+            "description": "Успешный ответ",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "newStatus": {
+                      "type": "string",
+                      "enum": [
+                        "pending_moderation",
+                        "pending_update_review"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "newStatus"
+                  ]
+                },
+                "example": {
+                  "success": true,
+                  "message": "Release submitted successfully. New status: pending_moderation",
+                  "newStatus": "pending_moderation"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/BadRequest"
+          }
+        },
+        "x-required-scope": "b2b_releases",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ReleaseNumber"
+          }
+        ]
+      }
+    },
+    "/b2b/v1/releases/{number}/cover": {
+      "post": {
+        "operationId": "uploadCover",
+        "summary": "Загрузить или заменить обложку",
+        "description": "Право токена: `b2b_releases`. Доступно в draft, rejected, rejected_by_tenant и review_error. Только .jpg (расширение .jpeg не принимается), корректный JPEG, квадрат 3000–6000 px, размер до 10485760 байт. Ссылки обложки возвращаются в ответе.",
+        "tags": [
+          "Файлы"
+        ],
+        "responses": {
+          "200": {
+            "description": "Успешный ответ",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "coverUrl": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "format": "uri"
+                    },
+                    "coverThumbUrl": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "format": "uri"
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "coverUrl",
+                    "coverThumbUrl"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        },
+        "x-required-scope": "b2b_releases",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ReleaseNumber"
+          }
+        ],
+        "requestBody": {
+          "description": "Поля запроса. Имена полей чувствительны к регистру.",
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "format": "binary"
+                  }
+                },
+                "required": [
+                  "file"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/b2b/v1/releases/{number}/tracks/presign": {
+      "post": {
+        "operationId": "presignTrack",
+        "summary": "Получить URL загрузки аудио",
+        "description": "Право токена: `b2b_releases`. Доступно в draft, rejected, rejected_by_tenant и review_error. WAV или FLAC, до 1 ГиБ. После ответа выполните PUT файла на uploadUrl с Content-Type из ответа, затем confirm. Сохраняйте key; не конструируйте его самостоятельно. Не добавляйте API-токен к запросу загрузки.",
+        "tags": [
+          "Треки"
+        ],
+        "responses": {
+          "200": {
+            "description": "Успешный ответ",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UploadUrl"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        },
+        "x-required-scope": "b2b_releases",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ReleaseNumber"
+          }
+        ],
+        "requestBody": {
+          "description": "Поля запроса. Имена полей чувствительны к регистру.",
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "filename": {
+                    "type": "string"
+                  },
+                  "contentLength": {
+                    "type": "number",
+                    "maximum": 1073741824
+                  }
+                },
+                "required": [
+                  "filename"
+                ]
+              },
+              "example": {
+                "filename": "track.wav",
+                "contentLength": 1048576
+              }
+            }
+          }
+        }
+      }
+    },
+    "/b2b/v1/releases/{number}/tracks/confirm": {
+      "post": {
+        "operationId": "confirmTrack",
+        "summary": "Подтвердить аудио и метаданные трека",
+        "description": "Право токена: `b2b_releases`. Доступно в draft, rejected, rejected_by_tenant и review_error. Файл должен уже существовать по key. Если position занята активным треком, его аудио/данные обновляются. Если position пропущена, добавляется следующая. Сохраните UUID track.id из ответа. Название необязательно при confirm, но требуется перед submit. subtitle синхронизируется с version. auto_isrc по умолчанию true; если присылаете собственный код, укажите auto_isrc=false. Непустой lyrics у инструментала запрещён. Аудиофайл проходит проверку и нормализацию.",
+        "tags": [
+          "Треки"
+        ],
+        "responses": {
+          "200": {
+            "description": "Успешный ответ",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "track": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "format": "uuid"
+                        },
+                        "number": {
+                          "type": "integer"
+                        },
+                        "position": {
+                          "type": "integer"
+                        },
+                        "title": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "id"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "track"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/BadRequest"
+          }
+        },
+        "x-required-scope": "b2b_releases",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ReleaseNumber"
+          }
+        ],
+        "requestBody": {
+          "description": "Поля запроса. Имена полей чувствительны к регистру.",
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TrackConfirm"
+              },
+              "example": {
+                "key": "<key из presign>",
+                "filename": "track.wav",
+                "title": "Новый сингл",
+                "position": 1,
+                "language": "ru",
+                "auto_isrc": true,
+                "artists": [
+                  {
+                    "name": "Пример артиста",
+                    "role": "performer"
+                  }
+                ],
+                "writers": [
+                  {
+                    "name": "Имя Фамилия",
+                    "role": "composer"
+                  },
+                  {
+                    "name": "Имя Фамилия",
+                    "role": "lyricist"
+                  }
+                ],
+                "aiDeclaration": {
+                  "used": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/b2b/v1/releases/{number}/tracks/{trackId}": {
+      "patch": {
+        "operationId": "updateTrack",
+        "summary": "Обновить метаданные трека",
+        "description": "Право токена: `b2b_releases`. Доступно в draft, rejected, rejected_by_tenant и review_error. artists и writers заменяют соответствующие списки целиком, [] очищает список. position перемещает трек в последовательности. Для инструментала очистите lyrics одновременно с is_instrumental=true, если текст был указан ранее.",
+        "tags": [
+          "Треки"
+        ],
+        "responses": {
+          "200": {
+            "description": "Успешный ответ",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SuccessMessage"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        },
+        "x-required-scope": "b2b_releases",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ReleaseNumber"
+          },
+          {
+            "$ref": "#/components/parameters/TrackId"
+          }
+        ],
+        "requestBody": {
+          "description": "Поля запроса. Имена полей чувствительны к регистру.",
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TrackPatch"
+              },
+              "example": {
+                "title": "Обновлённое название",
+                "lyrics": "Текст песни",
+                "is_instrumental": false
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteTrack",
+        "summary": "Удалить трек",
+        "description": "Право токена: `b2b_releases`. Доступно в draft, rejected, rejected_by_tenant и review_error. Удаляет активный трек текущего релиза и пересчитывает позиции остальных.",
+        "tags": [
+          "Треки"
+        ],
+        "responses": {
+          "200": {
+            "description": "Успешный ответ",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SuccessMessage"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        },
+        "x-required-scope": "b2b_releases",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ReleaseNumber"
+          },
+          {
+            "$ref": "#/components/parameters/TrackId"
+          }
+        ]
+      }
+    },
+    "/b2b/v1/releases/{number}/tracks/{trackId}/replace": {
+      "post": {
+        "operationId": "replaceTrackAudio",
+        "summary": "Заменить аудио существующего трека",
+        "description": "Право токена: `b2b_releases`. Доступно в draft, rejected, rejected_by_tenant и review_error. Сначала presign и PUT для этого же релиза. trackId должен быть UUID активного трека именно текущего релиза; в редакции прочитайте её новые UUID. Меняет аудио, размер и длительность, сохраняет метаданные и UUID трека.",
+        "tags": [
+          "Треки"
+        ],
+        "responses": {
+          "200": {
+            "description": "Успешный ответ",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SuccessMessage"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        },
+        "x-required-scope": "b2b_releases",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ReleaseNumber"
+          },
+          {
+            "$ref": "#/components/parameters/TrackId"
+          }
+        ],
+        "requestBody": {
+          "description": "Поля запроса. Имена полей чувствительны к регистру.",
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "key": {
+                    "type": "string",
+                    "description": "key из presign именно этого релиза."
+                  },
+                  "filename": {
+                    "type": "string"
+                  },
+                  "fileSize": {
+                    "type": "number",
+                    "default": 0,
+                    "description": "Для совместимости; фактический размер определяется по аудиофайлу."
+                  },
+                  "duration": {
+                    "type": [
+                      "number",
+                      "null"
+                    ],
+                    "description": "Для совместимости; фактическая длительность определяется по файлу."
+                  }
+                },
+                "required": [
+                  "key",
+                  "filename"
+                ]
+              },
+              "example": {
+                "key": "<key из presign>",
+                "filename": "replacement.wav"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/b2b/v1/releases/{number}/tracks/reorder": {
+      "post": {
+        "operationId": "reorderTracks",
+        "summary": "Изменить порядок треков",
+        "description": "Право токена: `b2b_releases`. Доступно в draft, rejected, rejected_by_tenant и review_error. Передайте UUID всех активных треков ровно по одному разу в нужном порядке. Неполный список и дубли отклоняются.",
+        "tags": [
+          "Треки"
+        ],
+        "responses": {
+          "200": {
+            "description": "Успешный ответ",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SuccessMessage"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        },
+        "x-required-scope": "b2b_releases",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ReleaseNumber"
+          }
+        ],
+        "requestBody": {
+          "description": "Поля запроса. Имена полей чувствительны к регистру.",
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "trackIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "minItems": 1,
+                    "uniqueItems": true
+                  }
+                },
+                "required": [
+                  "trackIds"
+                ]
+              },
+              "example": {
+                "trackIds": [
+                  "11111111-1111-4111-8111-111111111111"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/b2b/v1/releases/{number}/tracks/files/presign": {
+      "post": {
+        "operationId": "presignTrackAsset",
+        "summary": "Получить URL загрузки дополнительного файла",
+        "description": "Право токена: `b2b_releases`. Доступно в draft, rejected, rejected_by_tenant и review_error. video: mp4/mov/avi/webm до 6 ГиБ; ringtone: m4r/mp3/wav/ogg до 50 МиБ; synced_lyrics: только ttml до 5 МиБ. После ответа выполните PUT файла на uploadUrl с Content-Type из ответа, затем confirm. Сохраняйте key; не конструируйте его самостоятельно. Не добавляйте API-токен к запросу загрузки.",
+        "tags": [
+          "Файлы"
+        ],
+        "responses": {
+          "200": {
+            "description": "Успешный ответ",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "uploadUrl": {
+                      "type": "string",
+                      "format": "uri"
+                    },
+                    "finalUrl": {
+                      "type": "string",
+                      "format": "uri"
+                    },
+                    "key": {
+                      "type": "string"
+                    },
+                    "contentType": {
+                      "type": "string"
+                    },
+                    "assetType": {
+                      "$ref": "#/components/schemas/AssetType"
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "uploadUrl",
+                    "key",
+                    "contentType",
+                    "assetType"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        },
+        "x-required-scope": "b2b_releases",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ReleaseNumber"
+          }
+        ],
+        "requestBody": {
+          "description": "Поля запроса. Имена полей чувствительны к регистру.",
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "trackId": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "assetType": {
+                    "$ref": "#/components/schemas/AssetType"
+                  },
+                  "filename": {
+                    "type": "string"
+                  },
+                  "contentLength": {
+                    "type": "number",
+                    "default": 0
+                  }
+                },
+                "required": [
+                  "trackId",
+                  "assetType",
+                  "filename"
+                ]
+              },
+              "example": {
+                "trackId": "11111111-1111-4111-8111-111111111111",
+                "assetType": "synced_lyrics",
+                "filename": "lyrics.ttml",
+                "contentLength": 2048
+              }
+            }
+          }
+        }
+      }
+    },
+    "/b2b/v1/releases/{number}/tracks/files/confirm": {
+      "post": {
+        "operationId": "confirmTrackAsset",
+        "summary": "Подтвердить дополнительный файл",
+        "description": "Право токена: `b2b_releases`. Доступно в draft, rejected, rejected_by_tenant и review_error. Заменяет файл указанного типа после успешного PUT. synced_lyrics принимает только .ttml; язык TTML корректируется по языку трека. Для обычного текста песни используйте lyrics в метаданных трека.",
+        "tags": [
+          "Файлы"
+        ],
+        "responses": {
+          "200": {
+            "description": "Успешный ответ",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "assetType": {
+                      "$ref": "#/components/schemas/AssetType"
+                    },
+                    "url": {
+                      "type": "string",
+                      "format": "uri"
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "assetType",
+                    "url"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        },
+        "x-required-scope": "b2b_releases",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ReleaseNumber"
+          }
+        ],
+        "requestBody": {
+          "description": "Поля запроса. Имена полей чувствительны к регистру.",
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "trackId": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "assetType": {
+                    "$ref": "#/components/schemas/AssetType"
+                  },
+                  "key": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "trackId",
+                  "assetType",
+                  "key"
+                ]
+              },
+              "example": {
+                "trackId": "11111111-1111-4111-8111-111111111111",
+                "assetType": "synced_lyrics",
+                "key": "<key из presign дополнительных файлов>"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/b2b/v1/releases/{number}/tracks/{trackId}/files": {
+      "delete": {
+        "operationId": "deleteTrackAsset",
+        "summary": "Удалить дополнительный файл",
+        "description": "Право токена: `b2b_releases`. Доступно в draft, rejected, rejected_by_tenant и review_error. Отсутствующий файл возвращает success=true. Аудио трека этим методом не удаляется.",
+        "tags": [
+          "Файлы"
+        ],
+        "responses": {
+          "200": {
+            "description": "Успешный ответ",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SuccessMessage"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        },
+        "x-required-scope": "b2b_releases",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ReleaseNumber"
+          },
+          {
+            "$ref": "#/components/parameters/TrackId"
+          },
+          {
+            "name": "type",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/AssetType"
+            },
+            "example": "synced_lyrics"
+          }
+        ]
+      }
+    },
+    "/statistics": {
+      "get": {
+        "operationId": "getStatistics",
+        "summary": "Получить статистику прослушиваний",
+        "description": "Право токена: `API-токен аналитики`. Использует выданный API-токен аналитики; доступ зависит от типа и области токена. Для внешнего токена обязателен isrc или upc. До 100 ISRC, 50 UPC за запрос, до 50000 строк в ответе; лимит 2000 запросов/мин. Фильтры нескольких кодов передаются через запятую. paid_streams и streams_30s совпадают и означают прослушивания дольше 30 секунд. При отключённой аналитике возможен HTTP 503.",
+        "tags": [
+          "Аналитика"
+        ],
+        "responses": {
+          "200": {
+            "description": "Успешный ответ",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string"
+                    },
+                    "client_info": {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string"
+                        },
+                        "name": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        }
+                      }
+                    },
+                    "metadata": {
+                      "type": "object",
+                      "properties": {
+                        "total_rows_returned": {
+                          "type": "integer"
+                        },
+                        "query_params": {
+                          "type": "object",
+                          "properties": {
+                            "start_date": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "end_date": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "isrc_count": {
+                              "type": "integer"
+                            },
+                            "upc_count": {
+                              "type": "integer"
+                            },
+                            "platform": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "country": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/AnalyticsRow"
+                      }
+                    },
+                    "timestamp": {
+                      "type": "string",
+                      "format": "date-time"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "429": {
+            "description": "Превышен лимит 2000 запросов в минуту",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "Секунды ожидания",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          },
+          "503": {
+            "description": "Аналитика временно недоступна",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "isrc",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "ISRC через запятую, максимум 100",
+            "example": "AAABC2600001"
+          },
+          {
+            "name": "upc",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "UPC через запятую, максимум 50"
+          },
+          {
+            "name": "start_date",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            },
+            "description": "Начало периода YYYY-MM-DD; также поддерживается date_from"
+          },
+          {
+            "name": "end_date",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            },
+            "description": "Конец периода YYYY-MM-DD; также поддерживается date_to"
+          },
+          {
+            "name": "platform",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Название музыкальной площадки"
+          },
+          {
+            "name": "country",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Страна слушателя"
+          }
+        ]
+      }
+    },
+    "/b2b/v1/catalog/codes": {
+      "get": {
+        "tags": [
+          "Каталог кодов"
+        ],
+        "operationId": "listCatalogCodes",
+        "summary": "Получить релизы с присвоенными UPC и ISRC",
+        "description": "Требуется право b2b_catalog. Возвращаются релизы вашего кабинета со статусом approved, pending_dsp_review или pending_update_review, которым присвоен UPC и у всех активных треков заполнен ISRC. Релизы отсортированы по номеру по убыванию; треки — по позиции. Если коды ещё не присвоены, релиз в список не попадёт. Удалённые треки исключены.",
+        "x-required-scope": "b2b_catalog",
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "description": "Номер страницы. Значения меньше 1 приводятся к 1; некорректные значения заменяются значением по умолчанию.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1
+            }
+          },
+          {
+            "name": "per_page",
+            "in": "query",
+            "description": "Количество релизов на странице. Сервер ограничивает значение диапазоном 1–100.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 50
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Каталог присвоенных кодов.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogCodesList"
+                },
+                "example": {
+                  "success": true,
+                  "releases": [
+                    {
+                      "number": 1234,
+                      "title": "Первый свет",
+                      "release_type": "single",
+                      "upc": "1234567890128",
+                      "status": "approved",
+                      "release_date": "2030-01-15",
+                      "tracks": [
+                        {
+                          "position": 1,
+                          "title": "Первый свет",
+                          "isrc": "USABC3000001"
+                        }
+                      ]
+                    }
+                  ],
+                  "pagination": {
+                    "page": 1,
+                    "per_page": 50,
+                    "total_releases": 1,
+                    "total_pages": 1
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          }
+        }
+      }
+    },
+    "/b2b/v1/catalog/codes/{number}": {
+      "get": {
+        "tags": [
+          "Каталог кодов"
+        ],
+        "operationId": "getReleaseCatalogCodes",
+        "summary": "Получить UPC и ISRC одного релиза",
+        "description": "Требуется право b2b_catalog. Релиз должен принадлежать вашему кабинету, иметь статус approved, pending_dsp_review или pending_update_review, присвоенный UPC и ISRC у всех активных треков. Если релиз не соответствует этим условиям или недоступен вашему кабинету, возвращается 404.",
+        "x-required-scope": "b2b_catalog",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ReleaseNumber"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Релиз и присвоенные коды.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "success",
+                    "release"
+                  ],
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "release": {
+                      "$ref": "#/components/schemas/CatalogCodesRelease"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "Релиз не найден, недоступен вашему кабинету или коды ещё не готовы.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": "Release not found or has no assigned UPC"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          }
+        }
+      }
+    },
+    "/b2b/v1/genres": {
+      "get": {
+        "tags": [
+          "Справочники"
+        ],
+        "operationId": "listGenres",
+        "summary": "Получить жанры и поджанры",
+        "description": "Требуется право b2b_releases. Используйте идентификаторы из этого ответа в полях жанра и поджанра при создании или редактировании релиза. Значения зависят от настроек вашего кабинета; не формируйте идентификаторы самостоятельно.",
+        "x-required-scope": "b2b_releases",
+        "responses": {
+          "200": {
+            "description": "Доступные жанры. Ответ не содержит поля success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "genres"
+                  ],
+                  "properties": {
+                    "genres": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Genre"
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "genres": [
+                    {
+                      "id": "genre_1",
+                      "name": "Поп",
+                      "subgenres": [
+                        {
+                          "id": "subgenre_1",
+                          "name": "Инди-поп"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          }
+        }
+      }
+    },
+    "/b2b/v1/platforms": {
+      "get": {
+        "tags": [
+          "Справочники"
+        ],
+        "operationId": "listPlatforms",
+        "summary": "Получить музыкальные площадки",
+        "description": "Требуется право b2b_releases. Возвращает настроенные для вашего кабинета площадки, сгруппированные по категориям. Для выбора площадки используйте её name. Отключённые площадки могут присутствовать с disabledForTenant: true; их нельзя выбирать. Поле defaultSelected, если передано, указывает выбор по умолчанию. Идентификатор категории — служебное значение справочника, которое не нужно формировать самостоятельно.",
+        "x-required-scope": "b2b_releases",
+        "responses": {
+          "200": {
+            "description": "Категории и площадки.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "success",
+                    "categories"
+                  ],
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "categories": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/PlatformCategory"
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "success": true,
+                  "categories": [
+                    {
+                      "id": "group_1",
+                      "name": "Площадки",
+                      "stores": [
+                        {
+                          "name": "Spotify",
+                          "disabledForTenant": false,
+                          "defaultSelected": true
+                        },
+                        {
+                          "name": "Apple Music",
+                          "disabledForTenant": false
+                        }
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          }
+        }
+      }
+    },
+    "/b2b/v1/releases/by-package/{packageName}": {
+      "get": {
+        "tags": [
+          "Релизы"
+        ],
+        "operationId": "getReleaseByPackage",
+        "summary": "Найти релиз по имени загруженного пакета",
+        "description": "Требуется право b2b_releases. Поиск выполняется по точному имени файла ранее загруженного пакета в вашем кабинете. Передавайте имя как URL-кодированный сегмент пути. Если с одним именем связано несколько загрузок, используется последняя. ВАЖНО: поле release.number в ответе этого метода содержит имя пакета, а не числовой номер релиза. Числовой номер для других методов получите через GET /b2b/v1/releases/{number}, передав в number имя пакета либо UPC: этот метод возвращает числовой release.number. pending_update содержит последнюю найденную редакцию либо null; ingest_errors — ошибки последней загрузки при её неуспешном завершении, иначе null.",
+        "x-required-scope": "b2b_releases",
+        "parameters": [
+          {
+            "name": "packageName",
+            "in": "path",
+            "required": true,
+            "description": "Точное имя загруженного файла пакета.",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "example": "release-package-001.zip"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Релиз, найденный по пакету.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "success",
+                    "release"
+                  ],
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "release": {
+                      "$ref": "#/components/schemas/PackageRelease"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "Для указанного пакета релиз не найден.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": "Release not found for the specified package"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          }
+        }
+      }
+    },
+    "/b2b/v1/releases/{number}/pitching": {
+      "get": {
+        "tags": [
+          "Пичинг"
+        ],
+        "operationId": "getReleasePitching",
+        "summary": "Получить статус заявки на пичинг",
+        "description": "Требуется право b2b_pitching. Если релиз существует в вашем кабинете, но заявка ещё не создана, возвращается 200 с pitching: null.",
+        "x-required-scope": "b2b_pitching",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ReleaseNumber"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Статус заявки или отсутствие заявки.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "success",
+                    "pitching"
+                  ],
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "pitching": {
+                      "anyOf": [
+                        {
+                          "$ref": "#/components/schemas/PitchingStatus"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  }
+                },
+                "examples": {
+                  "pending": {
+                    "value": {
+                      "success": true,
+                      "pitching": {
+                        "status": "pending_admin",
+                        "admin_comment": null,
+                        "created_at": "2030-01-01T10:00:00.000Z",
+                        "updated_at": "2030-01-01T10:00:00.000Z"
+                      }
+                    }
+                  },
+                  "absent": {
+                    "value": {
+                      "success": true,
+                      "pitching": null
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Пичинг"
+        ],
+        "operationId": "submitReleasePitching",
+        "summary": "Подать или обновить заявку на пичинг",
+        "description": "Требуется право b2b_pitching. Создаёт заявку для релиза вашего кабинета или заменяет данные существующей заявки и возвращает её на рассмотрение со статусом pending_admin. Это не частичное обновление: отсутствующие необязательные поля очищают соответствующие значения ранее созданной заявки. Подача заявки не гарантирует размещение в плейлистах.",
+        "x-required-scope": "b2b_pitching",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ReleaseNumber"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PitchingRequest"
+              },
+              "example": {
+                "listen_url": "https://example.com/listen/release-001",
+                "description": "Новый сингл о начале нового дня. Подойдёт для подборок современной поп-музыки.",
+                "focus_tracks": "1",
+                "photos_url": "https://example.com/press/photos",
+                "social_links": "https://example.com/artist",
+                "additional_info": "Публикация клипа запланирована на дату релиза."
+              }
+            }
+          },
+          "description": "Поля запроса. Имена полей чувствительны к регистру."
+        },
+        "responses": {
+          "200": {
+            "description": "Заявка создана или обновлена.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SuccessMessage"
+                },
+                "example": {
+                  "success": true,
+                  "message": "Pitching request submitted successfully"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Некорректный номер релиза, поля заявки или настройки доступа.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ErrorResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/PitchingValidationError"
+                    }
+                  ]
+                },
+                "example": {
+                  "error": "Invalid Data",
+                  "details": {
+                    "formErrors": [],
+                    "fieldErrors": {
+                      "description": [
+                        "Description must be at least 10 characters long"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "BearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "API-токен, выданный администратором. В Scalar введите только токен; префикс Bearer добавляется автоматически."
+      }
+    },
+    "schemas": {
+      "ErrorResponse": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string"
+          },
+          "details": {},
+          "validationErrors": {
+            "type": "array",
+            "items": {}
+          },
+          "warnings": {
+            "type": "array",
+            "items": {}
+          },
+          "retryAfter": {
+            "type": "integer",
+            "description": "Секунды ожидания при HTTP 429"
+          },
+          "availableAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "additionalProperties": true,
+        "description": "Ошибка с дополнительными сведениями, если они доступны."
+      },
+      "SuccessMessage": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "success"
+        ],
+        "description": "Подтверждение успешного выполнения."
+      },
+      "Artist": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "role": {
+            "type": "string",
+            "description": "Исполнитель релиза: primary/featuring. Исполнитель трека: performer/featuring. Другие роли согласуйте с администратором."
+          },
+          "position": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "vk_music_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Ссылка на страницу артиста на соответствующей площадке; неподходящие ссылки могут быть отброшены.",
+            "format": "uri"
+          },
+          "yandex_music_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Ссылка на страницу артиста на соответствующей площадке; неподходящие ссылки могут быть отброшены.",
+            "format": "uri"
+          },
+          "apple_music_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Ссылка на страницу артиста на соответствующей площадке; неподходящие ссылки могут быть отброшены.",
+            "format": "uri"
+          },
+          "spotify_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Ссылка на страницу артиста на соответствующей площадке; неподходящие ссылки могут быть отброшены.",
+            "format": "uri"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "description": "Исполнитель релиза или трека."
+      },
+      "Writer": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "lyricist",
+              "composer"
+            ]
+          },
+          "position": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "required": [
+          "name",
+          "role"
+        ],
+        "description": "Автор текста или композитор."
+      },
+      "AiDeclaration": {
+        "description": "При used=false остальные поля необязательны и human. При used=true все поля обязательны; минимум одно значение должно быть ai или mixed.",
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "used": {
+                "type": "boolean",
+                "const": false
+              },
+              "music": {
+                "type": "string",
+                "const": "human"
+              },
+              "lyrics": {
+                "type": "string",
+                "const": "human"
+              },
+              "performance": {
+                "type": "string",
+                "const": "human"
+              },
+              "vocal": {
+                "type": "string",
+                "const": "human"
+              },
+              "postProduction": {
+                "type": "string",
+                "const": "human"
+              }
+            },
+            "required": [
+              "used"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "used": {
+                "type": "boolean",
+                "const": true
+              },
+              "music": {
+                "type": "string",
+                "enum": [
+                  "human",
+                  "ai"
+                ]
+              },
+              "lyrics": {
+                "type": "string",
+                "enum": [
+                  "human",
+                  "ai"
+                ]
+              },
+              "performance": {
+                "type": "string",
+                "enum": [
+                  "human",
+                  "ai",
+                  "mixed"
+                ]
+              },
+              "vocal": {
+                "type": "string",
+                "enum": [
+                  "human",
+                  "ai",
+                  "mixed"
+                ]
+              },
+              "postProduction": {
+                "type": "string",
+                "enum": [
+                  "human",
+                  "ai",
+                  "mixed"
+                ]
+              }
+            },
+            "required": [
+              "used",
+              "music",
+              "lyrics",
+              "performance",
+              "vocal",
+              "postProduction"
+            ],
+            "additionalProperties": false,
+            "anyOf": [
+              {
+                "required": [
+                  "music"
+                ],
+                "properties": {
+                  "music": {
+                    "enum": [
+                      "ai",
+                      "mixed"
+                    ]
+                  }
+                }
+              },
+              {
+                "required": [
+                  "lyrics"
+                ],
+                "properties": {
+                  "lyrics": {
+                    "enum": [
+                      "ai",
+                      "mixed"
+                    ]
+                  }
+                }
+              },
+              {
+                "required": [
+                  "performance"
+                ],
+                "properties": {
+                  "performance": {
+                    "enum": [
+                      "ai",
+                      "mixed"
+                    ]
+                  }
+                }
+              },
+              {
+                "required": [
+                  "vocal"
+                ],
+                "properties": {
+                  "vocal": {
+                    "enum": [
+                      "ai",
+                      "mixed"
+                    ]
+                  }
+                }
+              },
+              {
+                "required": [
+                  "postProduction"
+                ],
+                "properties": {
+                  "postProduction": {
+                    "enum": [
+                      "ai",
+                      "mixed"
+                    ]
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "TrackPatch": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "subtitle": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "isrc": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "ISRC: 12 символов. Пробелы/дефисы нормализуются при записи."
+          },
+          "auto_isrc": {
+            "type": "boolean"
+          },
+          "preview_start_seconds": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Устаревшее имя подзаголовка; используйте subtitle."
+          },
+          "language": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "lyrics": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Обычный текст песни. Для is_instrumental=true должен быть пустым или null."
+          },
+          "is_explicit": {
+            "type": "boolean"
+          },
+          "is_live": {
+            "type": "boolean"
+          },
+          "is_cover": {
+            "type": "boolean"
+          },
+          "is_remix": {
+            "type": "boolean"
+          },
+          "is_instrumental": {
+            "type": "boolean"
+          },
+          "position": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "artists": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Artist"
+            }
+          },
+          "writers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Writer"
+            }
+          },
+          "aiDeclaration": {
+            "$ref": "#/components/schemas/AiDeclaration"
+          }
+        },
+        "description": "Поля редактирования трека."
+      },
+      "Track": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "number": {
+            "type": "integer"
+          },
+          "position": {
+            "type": "integer"
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "subtitle": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "duration": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "isrc": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "auto_isrc": {
+            "type": "boolean"
+          },
+          "preview_start_seconds": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "language": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "lyrics": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "is_explicit": {
+            "type": "boolean"
+          },
+          "is_live": {
+            "type": "boolean"
+          },
+          "is_cover": {
+            "type": "boolean"
+          },
+          "is_remix": {
+            "type": "boolean"
+          },
+          "is_instrumental": {
+            "type": "boolean"
+          },
+          "upload_status": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": true,
+        "description": "Активный трек из ответа GET релиза."
+      },
+      "ReleasePatch": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "subtitle": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "genre": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "ID из GET /b2b/v1/genres."
+          },
+          "subgenre": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "ID поджанра из того же справочника."
+          },
+          "language": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "ru",
+              "en",
+              "es",
+              "de",
+              "fr",
+              "it",
+              "pt",
+              "ja",
+              "ko",
+              "zh",
+              "ar",
+              "hi",
+              "tr",
+              "pl",
+              "uk",
+              "kk",
+              null
+            ]
+          },
+          "release_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date"
+          },
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "cover_ai_used": {
+            "type": "boolean",
+            "default": false,
+            "description": "Если поле пропущено в PATCH, текущий API записывает false. Для AI-обложки передавайте true в каждом PATCH."
+          },
+          "release_type": {
+            "type": "string",
+            "enum": [
+              "single",
+              "single_maxi",
+              "ep",
+              "album"
+            ]
+          },
+          "delivery_mode": {
+            "type": "string",
+            "enum": [
+              "all",
+              "manual"
+            ]
+          },
+          "territory_mode": {
+            "type": "string",
+            "enum": [
+              "worldwide",
+              "custom"
+            ]
+          },
+          "auto_upc": {
+            "type": "boolean"
+          },
+          "asap_release": {
+            "type": "boolean"
+          },
+          "upc": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "12–14 цифр; при auto_upc=true до присвоения кода свой UPC не передавайте. Уже присвоенный платформой код нельзя изменить.",
+            "pattern": "^[0-9]{12,14}$"
+          },
+          "territories": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "selected_stores": {
+            "description": "Названия магазинов из GET /platforms. Массив выбранных названий либо объект название→boolean. Для выборочной отправки укажите delivery_mode=manual и непустой список.",
+            "oneOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "boolean"
+                }
+              }
+            ]
+          },
+          "user_message_to_moderator": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "release_artists": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Artist"
+            }
+          }
+        },
+        "description": "Поля редактирования релиза."
+      },
+      "Release": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "number": {
+            "type": "integer"
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "description": "Текущий статус: draft, rejected, rejected_by_tenant, review_error, pending_moderation, pending_update_review, pending_dsp_review, pending_dsp_preparation, approved, pending_deletion, pending_tenant_deletion_review, taken_down и другие статусы процесса."
+          },
+          "release_type": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "cover_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uri"
+          },
+          "genre": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "subgenre": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "language": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "release_date": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "upc": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "auto_upc": {
+            "type": "boolean"
+          },
+          "moderator_message": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tracks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Track"
+            }
+          },
+          "pending_update": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "number": {
+                "type": "integer"
+              },
+              "status": {
+                "type": "string"
+              },
+              "moderator_message": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          },
+          "ingest_errors": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {}
+          }
+        },
+        "additionalProperties": true,
+        "description": "Релиз и его текущие треки."
+      },
+      "UploadUrl": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "uploadUrl": {
+            "type": "string",
+            "format": "uri"
+          },
+          "finalUrl": {
+            "type": "string",
+            "format": "uri"
+          },
+          "key": {
+            "type": "string"
+          },
+          "contentType": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "success",
+          "uploadUrl",
+          "key",
+          "contentType"
+        ],
+        "description": "Данные для прямой загрузки файла."
+      },
+      "TrackConfirm": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "key из presign именно этого релиза."
+          },
+          "filename": {
+            "type": "string"
+          },
+          "fileSize": {
+            "type": "number",
+            "default": 0,
+            "description": "Для совместимости; фактический размер определяется по аудиофайлу."
+          },
+          "duration": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "Для совместимости; фактическая длительность определяется по файлу."
+          },
+          "title": {
+            "type": "string"
+          },
+          "subtitle": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "isrc": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "ISRC: 12 символов. Пробелы/дефисы нормализуются при записи."
+          },
+          "auto_isrc": {
+            "type": "boolean"
+          },
+          "preview_start_seconds": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Устаревшее имя подзаголовка; используйте subtitle."
+          },
+          "language": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "lyrics": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Обычный текст песни. Для is_instrumental=true должен быть пустым или null."
+          },
+          "is_explicit": {
+            "type": "boolean"
+          },
+          "is_live": {
+            "type": "boolean"
+          },
+          "is_cover": {
+            "type": "boolean"
+          },
+          "is_remix": {
+            "type": "boolean"
+          },
+          "is_instrumental": {
+            "type": "boolean"
+          },
+          "position": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "artists": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Artist"
+            }
+          },
+          "writers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Writer"
+            }
+          },
+          "aiDeclaration": {
+            "$ref": "#/components/schemas/AiDeclaration"
+          }
+        },
+        "required": [
+          "key",
+          "filename"
+        ],
+        "description": "Загруженный аудиофайл и метаданные трека."
+      },
+      "AssetType": {
+        "type": "string",
+        "enum": [
+          "video",
+          "ringtone",
+          "synced_lyrics"
+        ],
+        "description": "Тип дополнительного файла трека."
+      },
+      "AnalyticsRow": {
+        "type": "object",
+        "properties": {
+          "isrc": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "upc": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "platform": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "country": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "age": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "gender": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "os": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "device_type": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "content_type": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "album_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "date": {
+            "type": "string",
+            "format": "date"
+          },
+          "total_streams": {
+            "type": "integer"
+          },
+          "paid_streams": {
+            "type": "integer"
+          },
+          "streams_30s": {
+            "type": "integer"
+          }
+        },
+        "description": "Строка статистики прослушиваний."
+      },
+      "CatalogCodesTrack": {
+        "type": "object",
+        "required": [
+          "position",
+          "title",
+          "isrc"
+        ],
+        "properties": {
+          "position": {
+            "type": "integer"
+          },
+          "title": {
+            "type": "string"
+          },
+          "isrc": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Присвоенный треку ISRC."
+          }
+        },
+        "description": "CatalogCodesTrack"
+      },
+      "CatalogCodesRelease": {
+        "type": "object",
+        "required": [
+          "number",
+          "title",
+          "release_type",
+          "upc",
+          "status",
+          "release_date",
+          "tracks"
+        ],
+        "properties": {
+          "number": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "title": {
+            "type": "string"
+          },
+          "release_type": {
+            "type": "string"
+          },
+          "upc": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "approved",
+              "pending_dsp_review",
+              "pending_update_review"
+            ]
+          },
+          "release_date": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tracks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CatalogCodesTrack"
+            }
+          }
+        },
+        "description": "CatalogCodesRelease"
+      },
+      "CatalogCodesList": {
+        "type": "object",
+        "required": [
+          "success",
+          "releases",
+          "pagination"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "const": true
+          },
+          "releases": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CatalogCodesRelease"
+            }
+          },
+          "pagination": {
+            "type": "object",
+            "required": [
+              "page",
+              "per_page",
+              "total_releases",
+              "total_pages"
+            ],
+            "properties": {
+              "page": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "per_page": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 100
+              },
+              "total_releases": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "total_pages": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "При пустом каталоге равно 1."
+              }
+            }
+          }
+        },
+        "description": "CatalogCodesList"
+      },
+      "Genre": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "subgenres"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Идентификатор жанра из справочника."
+          },
+          "name": {
+            "type": "string"
+          },
+          "subgenres": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "name"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "description": "Genre"
+      },
+      "PlatformCategory": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "stores"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "stores": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlatformStore"
+            }
+          }
+        },
+        "description": "PlatformCategory"
+      },
+      "PlatformStore": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Название площадки; используйте его при выборе площадок релиза."
+          },
+          "disabledForTenant": {
+            "type": "boolean",
+            "description": "Площадка отключена для вашего кабинета."
+          },
+          "defaultSelected": {
+            "type": "boolean",
+            "description": "Площадка выбирается по умолчанию."
+          }
+        },
+        "description": "PlatformStore"
+      },
+      "PackageRelease": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": [
+          "id",
+          "number",
+          "title",
+          "status",
+          "release_type",
+          "cover_url",
+          "genre",
+          "subgenre",
+          "language",
+          "release_date",
+          "label",
+          "moderator_message",
+          "upc",
+          "tracks",
+          "pending_update",
+          "ingest_errors"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "number": {
+            "type": "string",
+            "description": "Имя пакета из параметра packageName. В этом методе поле не является числовым номером релиза."
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": "string"
+          },
+          "release_type": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "cover_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "genre": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "subgenre": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "language": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "release_date": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "moderator_message": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "upc": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tracks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PackageTrack"
+            }
+          },
+          "pending_update": {
+            "anyOf": [
+              {
+                "type": "object",
+                "required": [
+                  "number",
+                  "status",
+                  "moderator_message"
+                ],
+                "properties": {
+                  "number": {
+                    "type": [
+                      "integer",
+                      "string"
+                    ]
+                  },
+                  "status": {
+                    "type": "string"
+                  },
+                  "moderator_message": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                }
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "ingest_errors": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {},
+            "description": "Ошибки последней неуспешной загрузки пакета. Формат отдельных записей зависит от ошибки."
+          }
+        },
+        "description": "PackageRelease"
+      },
+      "PackageTrack": {
+        "type": "object",
+        "additionalProperties": true,
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "number": {
+            "type": [
+              "integer",
+              "string",
+              "null"
+            ]
+          },
+          "position": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "subtitle": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "duration": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "Длительность в секундах."
+          },
+          "isrc": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "auto_isrc": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "preview_start_seconds": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "language": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "lyrics": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "is_explicit": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "is_live": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "is_cover": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "is_remix": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "is_instrumental": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "upload_status": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "description": "PackageTrack"
+      },
+      "PitchingRequest": {
+        "type": "object",
+        "required": [
+          "listen_url",
+          "description"
+        ],
+        "properties": {
+          "listen_url": {
+            "type": "string",
+            "format": "uri",
+            "description": "Ссылка для прослушивания релиза."
+          },
+          "description": {
+            "type": "string",
+            "minLength": 10,
+            "description": "Описание релиза для редакторов площадок."
+          },
+          "focus_tracks": {
+            "type": "string",
+            "description": "Текстовое указание приоритетных треков."
+          },
+          "photos_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uri",
+            "description": "Ссылка на фотографии и пресс-материалы."
+          },
+          "social_links": {
+            "type": "string",
+            "description": "Ссылки на страницы артиста в виде строки."
+          },
+          "clip_preview_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uri",
+            "description": "Ссылка на предварительный просмотр клипа."
+          },
+          "additional_info": {
+            "type": "string",
+            "description": "Дополнительная информация для редакторов."
+          }
+        },
+        "description": "PitchingRequest"
+      },
+      "PitchingStatus": {
+        "type": "object",
+        "required": [
+          "status",
+          "admin_comment",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "description": "Статус заявки. Например: pending_admin — на рассмотрении; approved — одобрена; rejected — отклонена; needs_changes — нужны изменения."
+          },
+          "admin_comment": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "description": "PitchingStatus"
+      },
+      "PitchingValidationError": {
+        "type": "object",
+        "required": [
+          "error",
+          "details"
+        ],
+        "properties": {
+          "error": {
+            "type": "string",
+            "const": "Invalid Data"
+          },
+          "details": {
+            "type": "object",
+            "required": [
+              "formErrors",
+              "fieldErrors"
+            ],
+            "properties": {
+              "formErrors": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "fieldErrors": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "description": "PitchingValidationError"
+      }
+    },
+    "parameters": {
+      "ReleaseNumber": {
+        "name": "number",
+        "in": "path",
+        "required": true,
+        "description": "Числовой number релиза, полученный при создании или чтении редакции. Не UUID и не UPC.",
+        "schema": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "example": 123
+      },
+      "ReleaseLookup": {
+        "name": "number",
+        "in": "path",
+        "required": true,
+        "description": "Номер релиза, UPC либо точное имя импортированного пакета. Числовой номер предпочтителен. Поиск только в вашем кабинете.",
+        "schema": {
+          "type": "string"
+        },
+        "example": "123"
+      },
+      "TrackId": {
+        "name": "trackId",
+        "in": "path",
+        "required": true,
+        "description": "UUID из track.id текущего релиза. В редакции UUID отличается от оригинала.",
+        "schema": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "example": "11111111-1111-4111-8111-111111111111"
+      }
+    },
+    "responses": {
+      "BadRequest": {
+        "description": "Неверные параметры, данные или состояние релиза",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            }
+          }
+        }
+      },
+      "Unauthorized": {
+        "description": "Нет API-токена, он невалиден или кабинет недоступен",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            }
+          }
+        }
+      },
+      "Forbidden": {
+        "description": "У токена нет требуемых прав",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            }
+          }
+        }
+      },
+      "NotFound": {
+        "description": "Релиз или трек не найден в вашем кабинете",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            }
+          }
+        }
+      },
+      "Conflict": {
+        "description": "Конфликт: файл ещё не загружен, UPC уже назначен или действует ограничение редактирования",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            }
+          }
+        }
+      },
+      "RateLimited": {
+        "description": "Превышен лимит; retryAfter в JSON задаёт задержку в секундах",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            }
+          }
+        }
+      },
+      "ServerError": {
+        "description": "Ошибка обработки запроса",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            }
+          }
+        }
+      }
+    }
+  }
+}
